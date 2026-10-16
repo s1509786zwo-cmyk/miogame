@@ -334,7 +334,19 @@
       const bg   = dark ? "#1a0026" : "#f4f4f4";
       const edge = dark ? "#ff2d95" : "#111111";
       const txt  = dark ? "#f4e8ff" : "#111111";
-      ctx.fillStyle = "rgba(0,0,0,.25)"; ctx.fillRect(0, 0, W, H);
+      // 背景を潰さない:全面の黒スクリーンは使わず、下部だけの緩やかなグラデーション暗転
+      let useGrad = false;
+      if (ctx.createLinearGradient) {
+        try {
+          const g = ctx.createLinearGradient(0, H * 0.42, 0, H);
+          g.addColorStop(0, "rgba(0,0,0,0)");
+          g.addColorStop(1, dark ? "rgba(12,0,20,.28)" : "rgba(0,0,0,.20)");
+          ctx.fillStyle = g;
+          useGrad = true;
+        } catch (e) { /* 非対応環境は平坦な薄暗転にフォールバック */ }
+      }
+      if (!useGrad) ctx.fillStyle = "rgba(0,0,0,.16)";
+      ctx.fillRect(0, 0, W, H);
       ctx.fillStyle = bg; ctx.fillRect(wx, wy, ww, wh);
       ctx.strokeStyle = edge; ctx.lineWidth = 1;
       ctx.strokeRect(wx + 1.5, wy + 1.5, ww - 3, wh - 3);
@@ -577,18 +589,8 @@
           else ctx.fillStyle = "rgba(60,0,80,.22)";
           ctx.fillRect(0, 0, W, H);
         }
-        // ―― HUD ――
+        // ―― HUD ――(会話UIとトーストは frame() の最上位レイヤーで描画)
         drawHUD(ctx, m, world);
-        // 会話
-        Dialogue.draw(ctx);
-        // トースト
-        ctx.textAlign = "center";
-        Game.toasts.forEach((tst, i) => {
-          ctx.font = FONT(10, 600);
-          const tw = ctx.measureText(tst.text).width + 16;
-          ctx.fillStyle = "rgba(0,0,0,.7)"; ctx.fillRect(W / 2 - tw / 2, 118 - i * 18, tw, 16);
-          ctx.fillStyle = "#fff"; ctx.fillText(tst.text, W / 2, 121 - i * 18);
-        });
       },
     };
 
@@ -830,10 +832,21 @@
         const bctx = Game.bctx;
         bctx.save();
         bctx.imageSmoothingEnabled = false;
+        // 全面を不透明黒で塗るのは「シーンが何も描けなかった時のみ」視える。
+        // シーン描画は try/catch で守り、例外時に黒一枚画面で固まらないようにする。
         bctx.fillStyle = "#000"; bctx.fillRect(0, 0, W, H);
-        if (Game.scene && Game.scene.draw) Game.scene.draw(bctx);
-        bctx.restore();
-        // 転送オーバーレイ
+        let drawError = false;
+        try {
+          if (Game.scene && Game.scene.draw) Game.scene.draw(bctx);
+        } catch (err) {
+          drawError = true;
+          console.error("[いろ] draw error:", err);
+          bctx.fillStyle = "rgba(90,20,20,.55)"; bctx.fillRect(0, 0, W, H);
+          bctx.fillStyle = "#fff"; bctx.font = FONT(11, 700); bctx.textAlign = "center"; bctx.textBaseline = "middle";
+          bctx.fillText("—— 表示で問題が起きた ——", W / 2, H / 2 - 8);
+          bctx.font = FONT(8); bctx.fillText("(consoleにログ。ゲームは動き続けます)", W / 2, H / 2 + 8);
+        }
+        // 転送オーバーレイ(背景・キャラクターまで覆う。UIより下)
         const fx = Game.fx;
         if (fx) {
           const half = fx.dur / 2;
@@ -846,8 +859,13 @@
             bctx.fillStyle = `rgba(6,6,8,${Math.min(1, a * 1.6).toFixed(3)})`; bctx.fillRect(0, 0, W, H);
           }
         }
+        // ―― 最上位レイヤー:会話UI・トースト(転送中も潰れない) ――
+        if (Dialogue.active) Dialogue.draw(bctx);
+        if (!drawError) {
+          ctx_drawToasts(bctx);
+        }
+        bctx.restore();
         Input.endFrame();
-        composite();
       }
       requestAnimationFrame(frame);
     }
@@ -864,6 +882,19 @@
       ctx.drawImage(Game.buf, 0, 0);
       ctx.filter = "none";
       ctx.restore();
+    }
+    // 最上位レイヤーのトースト(会話ウィンドウと同じ扱いで転送オーバーレイより上)
+    function ctx_drawToasts(bctx) {
+      if (!Game.toasts.length) return;
+      bctx.save();
+      bctx.textAlign = "center"; bctx.textBaseline = "top";
+      Game.toasts.forEach((tst, i) => {
+        bctx.font = FONT(10, 600);
+        const tw = bctx.measureText(tst.text).width + 16;
+        bctx.fillStyle = "rgba(0,0,0,.7)"; bctx.fillRect(W / 2 - tw / 2, 118 - i * 18, tw, 16);
+        bctx.fillStyle = "#fff"; bctx.fillText(tst.text, W / 2, 121 - i * 18);
+      });
+      bctx.restore();
     }
 
     /* 画面下のボタン(同じ操作ができる) */

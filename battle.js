@@ -561,7 +561,7 @@
           ctx.font = FONT(11, 700); ctx.textAlign = "center";
           ctx.fillText(B.barResult, W / 2, BY - 16);
         }
-        Dialogue.draw(ctx);
+        // 会話ウィンドウは frame() 側の最上位レイヤーで描画される(黒スクリーン化防止)
       },
     };
     function drawAttackBar(ctx) {
@@ -610,7 +610,7 @@
     if (bd.hint) pages.push({ n: "", t: "―― ヒント ――" }, { n: "", t: "「" + bd.hint + "」" });
     pages.push({ n: "", t: "タイトルにもどる。直前の関門から、やり直せる(関門実装はステージ4)。" });
     return {
-      init() { G.transition(null, "fade"); },
+      init() { /* 暗転は Game.badEnd() 側が既に開始済み。ここで二重に転送しない(過剰な黒被りの原因) */ },
       update(dt) {
         if (Input.pressed.z) {
           if (i < pages.length - 1) { i++; AudioSys.sfx("tick"); }
