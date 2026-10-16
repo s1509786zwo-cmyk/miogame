@@ -214,7 +214,7 @@
     return {
       chapter: "prologue", day: 3, time: "朝", world: "real",
       map: "room", x: 10, y: 12,
-      objective: "", ripeness: 0, ripeCount: 0, npcTalk: {},
+      objective: "", ripeness: 0, ripeCount: 0, ripeCd: 0, npcTalk: {},
       flags: {},
     };
   }
@@ -260,6 +260,19 @@
         state.world = "real"; AudioSys.setWorld("real");
         Game.setScene("badend", { key });
       }, "fade");
+    },
+    /* ---- 空の熟れ度(§4:0〜100。100で強制転送/70以上でナースコール解除) ---- */
+    addRipeness(v) { state.ripeness = U.clamp(state.ripeness + v, 0, 100); },
+    /** 現実⇄向こう側の強制移動 */
+    shiftToWorld(w, msg) {
+      if (state.world === w) return false;
+      Game.transition(() => {
+        state.world = w; AudioSys.setWorld(w);
+        state.time = w === "other" ? "夜" : "朝";
+        if (w === "other") { state.ripeness = Math.min(state.ripeness, 88); state.ripeCd = 10; }
+        if (msg) Game.toast(msg);
+      }, "bloom");
+      return true;
     },
     /** 暗転 → mid() で切替 → 明ける。明けども(中間点すぎ)なら新しい転送で上書き可 */
     transition(mid, type) {
@@ -523,6 +536,17 @@
           }
         }
         // ※ Game.updateFX は frame ループ側で一度だけ呼ばれる(ここでは進めない)
+        // ―― 空の熟れ度:経過で小幅に上昇(夜が大/昼小/向こう側も微増)。100で強制転送 ――
+        if (!Dialogue.active && !Game.fx) {
+          let rate = 0;
+          if (state.world === "real") rate = state.time === "夜" ? 0.35 : state.time === "昼" ? 0.12 : 0.04;
+          else rate = 0.1;
+          if (state.ripeCd > 0) state.ripeCd -= dt;
+          else state.ripeness = U.clamp(state.ripeness + rate * dt, 0, 100);
+          if (state.world === "real" && state.ripeness >= 100) {
+            Game.shiftToWorld("other", "空が、熟れた。――向こう側に、引きずられる――");
+          }
+        }
         for (let i = Game.toasts.length - 1; i >= 0; i--) { Game.toasts[i].t -= dt; if (Game.toasts[i].t <= 0) Game.toasts.splice(i, 1); }
       },
       draw(ctx) {
@@ -545,6 +569,14 @@
         ctx.beginPath(); ctx.ellipse(S.px, S.py + 1, 5, 2, 0, 0, 7); ctx.fill();
         drawPerson(ctx, key, S.px, S.py + 2 + bob, 26, "", world, S.dir === "left");
         ctx.restore();
+        // ―― 向こう側の装飾:ミケの付き添い + 紫のヴィネット ――
+        if (state.world === "other") {
+          Assets.draw(ctx, "monsters/mike", Math.round(S.px) + 8, Math.round(S.py) - 12, 16, 16, { world: "other", label: false });
+          const rg = ctx.createRadialGradient ? ctx.createRadialGradient(W / 2, H / 2, 92, W / 2, H / 2, 200) : null;
+          if (rg) { rg.addColorStop(0, "rgba(60,0,80,0)"); rg.addColorStop(1, "rgba(60,0,80,.42)"); ctx.fillStyle = rg; }
+          else ctx.fillStyle = "rgba(60,0,80,.22)";
+          ctx.fillRect(0, 0, W, H);
+        }
         // ―― HUD ――
         drawHUD(ctx, m, world);
         // 会話
@@ -560,21 +592,33 @@
       },
     };
 
-    function addRipeness(v) {
-      state.ripeness = U.clamp(state.ripeness + v, 0, 100);
-      if (state.ripeness >= 100 && !Dialogue.active) {
-        Game.toast("空が、熟れすぎた……"); // 強制転送はステージ3で実装
-      }
-    }
+    function addRipeness(v) { Game.addRipeness(v); }
     SC.addRipeness = addRipeness;
     SC.dialogueActive = () => Dialogue.active;
 
     function nurseCall() {
       AudioSys.sfx("call");
-      if (state.ripeness > 0) {
-        state.ripeness = U.clamp(state.ripeness - 25, 0, 100);
+      if (state.world === "other") {
+        // 向こう側で合言葉を言う → 足音が来て、現実へ戻してもらえる
+        state.ripeness = U.clamp(state.ripeness - 55, 0, 100);
         state.ripeCount++;
-        Game.toast("「……空が、熟れてきました」 楓さんが来て、少し楽になった");
+        Dialogue.open([
+          { n: "澪", t: "「……空が、熟れてきました」" },
+          { n: "", t: "足音が廊下を走ってくる。ドアが開き、白い制服が入ってくる。" },
+          { n: "楓", t: "「来たよ。教えてくれて、それだけでいい」" },
+        ], () => Game.shiftToWorld("real", "現実にもどった。廊下は、白い。"));
+      } else if (state.ripeness >= 70) {
+        // 70以上でコール → 下がる。使うたびに手掛かりが増える(clues はステージ4で消費)
+        state.ripeness = U.clamp(state.ripeness - 40, 0, 100);
+        state.ripeCount++;
+        const clue = Game.STORY.clues[state.ripeCount - 1];
+        const pages = [
+          { n: "澪", t: "「……空が、熟れてきました」" },
+          { n: "楓", t: "「聞いた。ここにいるよ、大丈夫」" },
+        ];
+        if (clue) pages.push(clue);
+        Dialogue.open(pages);
+        AudioSys.sfx("heal");
       } else {
         Game.toast("今はまだ、空は熟れていない。……押しても、いい。");
         Dialogue.open([{ n: "楓", t: "「うん、聞いたよ。用事がなくても、押していいの。約束だからね」" }]);
@@ -723,15 +767,18 @@
     ctx.fillRect(0, H - 13, 100, 13);
     ctx.fillStyle = world === "real" ? "#111" : "#ffd23f";
     ctx.fillText(`入院${state.day}日目・${state.time}`, 4, H - 11);
-    // 空の熟れ度(右下)
-    if (state.ripeness > 0) {
+    // 空の熟れ度(右下)。向こう側では常時表示。70以上で枠が点滅
+    if (state.ripeness > 0 || world === "other") {
       const gx = W - 82, gy = H - 26;
       ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(gx - 5, gy - 11, 87, 20);
       ctx.fillStyle = "#bbb"; ctx.font = FONT(7); ctx.fillText("空の熟れ度", gx, gy - 10);
       ctx.fillStyle = "#333"; ctx.fillRect(gx, gy - 2, 62, 6);
       ctx.fillStyle = state.ripeness >= 70 ? "#ff2d2d" : state.ripeness >= 40 ? "#ffb03a" : "#29e05f";
       ctx.fillRect(gx, gy - 2, 62 * state.ripeness / 100, 6);
-      if (state.ripeness >= 70) { ctx.fillStyle = "#ff9"; ctx.fillText("Cでナースコール", gx, gy + 6); }
+      if (state.ripeness >= 70) {
+        ctx.fillStyle = "#ff9"; ctx.fillText("Cでナースコール", gx, gy + 6);
+        if (Math.floor(performance.now() / 260) % 2 === 0) { ctx.strokeStyle = "#ff2d2d"; ctx.strokeRect(gx - 5.5, gy - 11.5, 87, 21); }
+      }
     }
     ctx.restore();
   }
@@ -852,6 +899,10 @@
           Game.saveNow();
         } else if (e.code === "KeyB") {
           if (Game.sceneName === "explore") Game.startBattle("gyorome");
+        } else if (e.code === "KeyN") {
+          if (Game.sceneName === "explore") Game.startBattle("queen");
+        } else if (e.code === "KeyM") {
+          if (Game.sceneName === "explore") Game.startBattle("gate");
         }
       });
     }
