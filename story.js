@@ -14,7 +14,7 @@ window.IRO_STORY = (function () {
     subtitle: "— a game about color and calling for help —",
     warning: "この作品には、精神疾患と、家族の死を扱う場面があります。",
     controls:
-      "矢印キー/WASD:移動  Z/Enter:決定  X:キャンセル・閉じる\nC:ナースコール（合言葉）  画面下のボタンでも操作できます",
+      "矢印キー/WASD:移動  Z/Enter:決定  X:キャンセル・閉じる\nC:ナースコール（合言葉）  画面はウィンドウいっぱいに拡大表示されます",
   };
 
   // ---------- プロローグ 白い廊下 ----------

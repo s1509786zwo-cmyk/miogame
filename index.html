@@ -2,67 +2,36 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>いろ</title>
 <style>
-  :root { --pad: 10px; }
+  :root { }
   html, body { margin:0; padding:0; height:100%; background:#0a0a0c; overflow:hidden; }
   body {
-    display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
-    gap:var(--pad); padding:var(--pad) 0 calc(var(--pad) + env(safe-area-inset-bottom));
     font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;
-    color:#ddd; touch-action:manipulation; user-select:none; -webkit-user-select:none;
-    overscroll-behavior:none;
+    color:#ddd; user-select:none; -webkit-user-select:none; overscroll-behavior:none;
   }
   /* フォント差し替え用スロット(後段で @font-face を追加して上書きする) */
+  /* 画面はウィンドウいっぱいに拡大する。操作はキーボードのみ
+     (画面下のボタン・十字キーは廃止。ボタン類は canvas 内に描画する) */
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
   #screen {
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     background:#000;
-    box-shadow: 0 0 0 2px #222, 0 8px 40px rgba(0,0,0,.6);
+    box-shadow: 0 0 0 1px #1c1c20, 0 0 90px rgba(0,0,0,.9);
     display:block;
   }
-  #wrap { display:flex; align-items:center; justify-content:center; width:100%; flex:1 1 auto; min-height:0; overflow:hidden; }
-  #controls {
-    flex: 0 0 auto;
-    width:min(680px,100%); display:flex; align-items:center; justify-content:space-between;
-    padding:6px 14px; box-sizing:border-box;
+  /* 部屋の照明に溶け込む、画面外のほんのりした残り火 */
+  #stage::after {
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background: radial-gradient(circle at 50% 50%, rgba(255,45,149,.05), rgba(0,0,0,0) 60%);
   }
-  .dpad { display:grid; grid-template-columns:repeat(3,44px); grid-template-rows:repeat(3,44px); gap:4px; }
-  .abtn { display:flex; gap:10px; align-items:center; }
-  .btn {
-    display:flex; align-items:center; justify-content:center;
-    border:1px solid #444; border-radius:10px; background:#161618; color:#bbb;
-    font-size:15px; line-height:1; touch-action:none; cursor:pointer;
-    -webkit-tap-highlight-color:transparent;
-  }
-  .btn:active, .btn.on { background:#3a3a44; color:#fff; border-color:#888; }
-  .btn.u{grid-area:1/2} .btn.l{grid-area:2/1} .btn.r{grid-area:2/3} .btn.d{grid-area:3/2}
-  .btn.z, .btn.x, .btn.c { width:56px; height:56px; border-radius:50%; flex-direction:column; font-size:13px; }
-  .btn small{ font-size:9px; color:#777; margin-top:2px; }
-  .btn.z{border-color:#2b6; color:#2b6} .btn.x{border-color:#e55; color:#e55} .btn.c{border-color:#59e; color:#59e}
-  #hint { position:fixed; left:8px; bottom:4px; font-size:10px; color:#555; }
-  @media (max-height:560px){ .dpad{grid-template-columns:repeat(3,38px); grid-template-rows:repeat(3,38px)} .btn.z,.btn.x,.btn.c{width:48px;height:48px} }
+  @media (prefers-reduced-motion: reduce) { #stage::after { display:none } }
 </style>
 </head>
 <body>
-  <div id="wrap"><canvas id="screen" width="320" height="240"></canvas></div>
-
-  <!-- 画面の下に、同じ操作ができる画面上のボタン -->
-  <div id="controls">
-    <div class="dpad">
-      <div class="btn u" data-key="up">▲</div>
-      <div class="btn l" data-key="left">◀</div>
-      <div class="btn r" data-key="right">▶</div>
-      <div class="btn d" data-key="down">▼</div>
-    </div>
-    <div class="abtn">
-      <div class="btn x" data-key="x">X<small>キャンセル</small></div>
-      <div class="btn c" data-key="c">C<small>コール</small></div>
-      <div class="btn z" data-key="z">Z<small>決定</small></div>
-    </div>
-  </div>
-  <div id="hint">矢印/WASD:移動 Z:決定 X:キャンセル C:ナースコール</div>
+  <div id="stage"><canvas id="screen" width="320" height="240"></canvas></div>
 
   <script src="story.js"></script>
   <script src="maps.js"></script>

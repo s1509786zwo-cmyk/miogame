@@ -43,7 +43,7 @@
     },
   };
 
-  /* ================= Input: キーボード + 画面ボタン ================= */
+  /* ================= Input: キーボード(画面ボタンは廃止。virtualは互換のため残置) ================= */
   const KEYMAP = {
     ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down",
     ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right",
@@ -132,7 +132,7 @@
 
   /* ================= Assets: プリロード(失敗は仮矩形で代替) ================= */
   const ASSET_KEYS = {
-    characters: ["mio_real", "mio_other", "kaede", "kaede_gauze", "mother", "doctor", "nurse_night", "staff_meal", "hana"],
+    characters: ["mio_real", "mio_other", "mio_real_s", "mio_other_s", "kaede", "kaede_gauze", "mother", "doctor", "nurse_night", "staff_meal", "hana"],
     monsters: ["mike", "gyorome", "honey_queen", "gatekeeper_l", "gatekeeper_s",
                "witch_0", "witch_1", "witch_2", "witch_3", "witch_4"],
     tiles: ["tileset_real", "tileset_other"],
@@ -462,6 +462,8 @@
       mapId: state.map && maps[state.map] ? state.map : "room",
       px: 0, py: 0, dir: "down", moving: false, mvt: 0, fromX: 0, fromY: 0, toX: 0, toY: 0,
       labelT: 0, animT: 0, pendingWarp: null,
+      // 主人公リグの状態(歩行/振り返り/躊躇/恐怖/異常反応)
+      turnT: 0, hesT: 0, flinchT: 0, prevDir: "down", prevWorld: state.world,
     };
     const SPEED = 105; // px/秒
     function map() { return maps[S.mapId]; }
@@ -514,6 +516,11 @@
         S.animT += dt;
         if (S.labelT > 0) S.labelT -= dt;
         SC.labelT = S.labelT;
+        // リグのタイマー:振り返り/躊躇/すくみは秒時計で減衰
+        if (S.turnT > 0) S.turnT = Math.max(0, S.turnT - dt);
+        if (S.hesT > 0) S.hesT = Math.max(0, S.hesT - dt);
+        if (S.flinchT > 0) S.flinchT = Math.max(0, S.flinchT - dt);
+        if (state.world !== S.prevWorld) { S.prevWorld = state.world; S.flinchT = 0.5; } // 転送直後はすくむ
         if (Game.fx) return;                       // 転送中は入力を受け付けない
         if (Dialogue.active) { Dialogue.update(dt); return; }
         if (Input.pressed.c) nurseCall();
@@ -525,6 +532,7 @@
           else if (Input.down.down) { dy = 1; S.dir = "down"; }
           else if (Input.down.left) { dx = -1; S.dir = "left"; }
           else if (Input.down.right) { dx = 1; S.dir = "right"; }
+          if (S.dir !== S.prevDir) { S.prevDir = S.dir; S.turnT = 0.22; } // 振り返り
           if (dx || dy) {
             const nx = S.toX + dx, ny = S.toY + dy;
             if (!solid(nx, ny)) {
@@ -532,6 +540,8 @@
               S.moving = true; S.mvt = 0;
               const dr = doorAt(nx, ny);
               if (dr) S.pendingWarp = dr;
+            } else if (S.hesT <= 0) {
+              S.hesT = 0.4; // 塞がれた足元:一拍、踏み出して引っ込む
             }
           }
         }
@@ -574,16 +584,31 @@
         for (const o of (m.objects || [])) drawObject(ctx, o, world);
         // NPC
         for (const n of (m.npcs || [])) drawPerson(ctx, n.sprite, n.x * TILE + 8, n.y * TILE + TILE, 26, n.name, world, false);
-        // 主人公
+        // 主人公(帯リグ:歩行/振り返り/躊躇/恐怖/異常反応)
         const key = world === "real" ? "mio_real" : "mio_other";
-        const bob = S.moving ? Math.round(Math.sin(S.animT * 12) * 1.2) : 0;
+        const hh = 30; // NPC(26)より僅かに大きくして主観の中心に
+        const fear = world === "other" || state.ripeness >= 70;
+        const fr = heroFrame({
+          t: S.animT, moving: S.moving, dir: S.dir,
+          turnT: S.turnT, hesT: S.hesT, flinchT: S.flinchT, fear,
+        });
         ctx.fillStyle = pal.shadow;
-        ctx.beginPath(); ctx.ellipse(S.px, S.py + 1, 5, 2, 0, 0, 7); ctx.fill();
-        drawPerson(ctx, key, S.px, S.py + 2 + bob, 26, "", world, S.dir === "left");
+        // 影:hop 時には僅かに縮む(接地感の補助)
+        const shrunk = S.moving ? (fr.dy[0] < 0 ? 0.82 : 1) : 1;
+        ctx.beginPath(); ctx.ellipse(S.px, S.py + 1, 5 * shrunk, 2 * shrunk, 0, 0, 7); ctx.fill();
+        if (!HeroRig.draw(ctx, key, Math.round(S.px), S.py + 2, hh, world, fr)) {
+          drawPerson(ctx, key, S.px, S.py + 2 + Math.round(fr.dy[0] * (hh / 120)), hh, "", world, fr.flip);
+        }
+        // 恐怖が強いとき、足元にだけ細く異色の縁(演出は抑えめに)
+        if (fear && Math.floor(S.animT * 2) % 2 === 0) {
+          ctx.strokeStyle = "rgba(255,45,149,.35)";
+          ctx.beginPath(); ctx.ellipse(S.px, S.py + 2, 6.5, 2.5, 0, 0, 7); ctx.stroke();
+        }
         ctx.restore();
-        // ―― 向こう側の装飾:ミケの付き添い + 紫のヴィネット ――
+        // ―― 向こう側の装飾:ミケの付き添い(小刻みな hop)+ 紫のヴィネット ――
         if (state.world === "other") {
-          Assets.draw(ctx, "monsters/mike", Math.round(S.px) + 8, Math.round(S.py) - 12, 16, 16, { world: "other", label: false });
+          const mh = Math.abs(Math.sin(S.animT * 5)) > 0.72 ? 1 : 0;
+          Assets.draw(ctx, "monsters/mike", Math.round(S.px) + 8, Math.round(S.py) - 12 - mh, 16, 16, { world: "other", label: false });
           const rg = ctx.createRadialGradient ? ctx.createRadialGradient(W / 2, H / 2, 92, W / 2, H / 2, 200) : null;
           if (rg) { rg.addColorStop(0, "rgba(60,0,80,0)"); rg.addColorStop(1, "rgba(60,0,80,.42)"); ctx.fillStyle = rg; }
           else ctx.fillStyle = "rgba(60,0,80,.22)";
@@ -739,9 +764,108 @@
     const w = Math.round(h * (it && it.ok ? it.img.width / it.img.height : 0.6));
     ctx.save();
     if (flip) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
-    const r = Assets.draw(ctx, "characters/" + key, cx - w / 2, footY - h, w, h, { world, label: name || key, anchor: "top", stretch: false });
+    Assets.draw(ctx, "characters/" + key, cx - w / 2, footY - h, w, h, { world, label: name || key, anchor: "top", stretch: false });
     ctx.restore();
   }
+
+  /* ============ HeroRig: 主人公リグ(歩行・停止・振り返り・躊躇・恐怖) ============
+   * 元絵(mio_real/mio_other)は站立の1枚絵。これを消し込まず動かすため、
+   * 「絵が元から切れている行」で頭・衣・脚の3帯に分け、帯単位で変位させる。
+   * 身体の新造・書き足しはしない。帯境界は build_heroes.py が自動検出する
+   * assets/characters/mio_parts.json を使う(縮約画像mio_*_s.pngと対)。
+   * 前処理産が無ければ元1枚絵をそのまま、画像自体が無ければ仮矩形に落ちる。
+   */
+  const HeroRig = {
+    bands: null, srcW: 60, srcH: 120,
+    load() {
+      try {
+        const x = new XMLHttpRequest();
+        x.open("GET", "assets/characters/mio_parts.json", false);
+        x.send(null);
+        if (x.status === 200 || (x.status === 0 && x.responseText)) {
+          const j = JSON.parse(x.responseText);
+          if (j && j.mio_real && j.mio_real.bands) {
+            this.bands = { mio_real: j.mio_real.bands, mio_other: j.mio_other.bands };
+            this.srcW = j.mio_real.w || 60; this.srcH = j.mio_real.h || 120;
+          }
+        }
+      } catch (e) { /* file:/オフラインでは1枚絵モードで動く */ }
+      return this;
+    },
+    imgKey(key) {
+      const s = Assets.get("characters/" + key + "_s");
+      if (s && s.ok) return key + "_s";
+      const o = Assets.get("characters/" + key);
+      return (o && o.ok) ? key : null;
+    },
+    /* a = heroFrame() の出力。dy/dx は元画像px、swayX は表示px */
+    draw(ctx, key, cx, footY, h, world, a) {
+      const use = this.imgKey(key);
+      if (!use) return false;
+      const it = Assets.get("characters/" + use).img;
+      const sh = it.height, sw = it.width, k = h / sh;
+      const b = (this.bands && this.bands[key]) || [Math.round(sh * 0.34), Math.round(sh * 0.83)];
+      const cut = [0, Math.min(b[0], sh - 2), Math.min(b[1], sh - 1), sh];
+      const dy = a.dy || [0, 0, 0];
+      const dx = a.dx || [0, 0, 0];   // 帯ごとの横ズレ(脚の入れ替え・髪なび)
+      ctx.save();
+      ctx.translate(cx + (a.swayX || 0), 0);
+      if (a.flip) ctx.scale(-1, 1);
+      if (a.squashX != null && a.squashX !== 1) ctx.scale(a.squashX, 1);
+      for (let i = 0; i < 3; i++) {
+        const sy = cut[i], sy2 = cut[i + 1];
+        const dh = Math.max(1, Math.round((sy2 - sy) * k)) + 1; // +1: 帯の隙間隠し
+        ctx.drawImage(it, 0, sy, sw, sy2 - sy,
+          Math.round(-(sw * k) / 2 + dx[i] * k), Math.round(footY - h + sy * k + dy[i] * k),
+          Math.round(sw * k), dh);
+      }
+      ctx.restore();
+      return true;
+    },
+  };
+  /* 1フレーム分の帯変位を計算。単位=元画像px(60x120)。+y は沈み、+x は前(向き側)。
+     HeroRig.draw 内の k で縮むため、4〜10px の変位が表示では1〜2pxの自然な揺れになる */
+  function heroFrame(a) {
+    const f = { dy: [0, 0, 0], dx: [0, 0, 0], swayX: 0, squashX: 1, flip: a.dir === "left" };
+    const t = a.t, fear = a.fear ? 1 : 0;
+    // 呼吸:頭が先に持ち上がり、衣が僅かに遅れる(恐怖時は浅く速い)
+    const br = Math.sin(t * (fear ? 6.4 : 1.9));
+    f.dy[0] = br > 0.55 ? -3 : 0;
+    f.dy[1] = br > 0.80 ? -2 : 0;
+    // 待機中、ときどき肩をすくめる
+    if (!a.moving && (t % 7.3) < 0.3) { f.dy[0] -= 4; f.dy[1] -= 3; }
+    // 歩行:hop(着地→空中)と脚帯の前後スライドで交互着地の錯覚、髪なび
+    if (a.moving) {
+      const step = (t * 6) % 2, hop = step < 1 ? 1 : 0;
+      f.dy[0] = -hop * 6 - 1; f.dy[1] = -hop * 5; f.dy[2] = (1 - hop) * 2;
+      f.dx[0] = step < 1 ? -2 : 2;                 // 髪の引きずり
+      f.dx[2] = step < 1 ? 3 : -3;                 // 脚帯の入れ替え
+      const lean = (a.dir === "left" ? -2 : a.dir === "right" ? 2 : 0) * (hop ? 1 : 0.5);
+      f.dx[0] += Math.round(lean); f.dx[1] += Math.round(lean / 2); // 前傾
+      if (fear) f.swayX = step < 1 ? 2 : -2;       // 恐怖のふらつき(表示px)
+    }
+    // 恐怖:高周波の震え(表示px)
+    if (fear) f.swayX += Math.round(Math.sin(t * 27) * 0.9);
+    // 躊躇:踏み出して引っ込む往復+俯き
+    if (a.hesT > 0) {
+      f.swayX += Math.round(Math.sin(a.hesT * 26) * a.hesT * 3);
+      f.dy[0] += 6; f.dy[1] += 2;
+    }
+    // 振り返り:横幅を潰して回す(220ms)。視線はひと拍落ちる
+    if (a.turnT > 0) {
+      const p = 1 - a.turnT / 0.22;
+      f.squashX = 0.32 + 0.68 * Math.abs(Math.cos(p * Math.PI));
+      f.dy[0] += 3;
+    }
+    // 異常への反応:すくんで沈み込む
+    if (a.flinchT > 0) {
+      const p = Math.sin((a.flinchT / 0.5) * Math.PI);
+      f.dy[0] += Math.round(10 * p); f.dy[1] += Math.round(6 * p); f.dy[2] += Math.round(3 * p);
+      f.squashX = 1 - 0.14 * p;
+    }
+    return f;
+  }
+
   function drawHUD(ctx, m, world) {
     ctx.save();
     ctx.textAlign = "left"; ctx.textBaseline = "top";
@@ -794,10 +918,12 @@
     Game.buf = document.createElement("canvas"); Game.buf.width = W; Game.buf.height = H;
     Game.bctx = Game.buf.getContext("2d");
     function resize() {
-      const wrap = document.getElementById("wrap") || document.body;
-      const r = wrap.getBoundingClientRect();
-      const availW = Math.max(80, r.width - 8), availH = Math.max(60, r.height - 8);
-      let s = Math.max(1, Math.floor(Math.min(availW / W, availH / H)));
+      // ウィンドウっぱいに拡大。内部320x240のまま整数倍のみ(にじみ防止)
+      const vw = Math.max(W, window.innerWidth | 0 || W * 2);
+      const vh = Math.max(H, window.innerHeight | 0 || H * 2);
+      let s = Math.max(1, Math.min(Math.floor(vw / W), Math.floor(vh / H)));
+      // 画面が広すぎる場合は段階的に大きく(偶数倍を好み、ドットの均整を保つ)
+      if (s >= 3 && s % 2 === 1 && (s + 1) * W <= vw && (s + 1) * H <= vh) s += 1;
       Game.scale = s;
       canvas.style.width = W * s + "px"; canvas.style.height = H * s + "px";
     }
@@ -806,6 +932,7 @@
     Game.ctx.imageSmoothingEnabled = false;
 
     Game.setScene("title");
+    HeroRig.load(); // 主人公リグの帯情報(無くても1枚絵で動く)
 
     // プリロード
     const b = Game.bctx;
@@ -897,20 +1024,8 @@
       bctx.restore();
     }
 
-    /* 画面下のボタン(同じ操作ができる) */
-    const controls = document.getElementById("controls");
-    if (controls) {
-      controls.addEventListener("contextmenu", (e) => e.preventDefault());
-      controls.querySelectorAll("[data-key]").forEach((btn) => {
-        const name = btn.getAttribute("data-key");
-        const on = (e) => { e.preventDefault(); AudioSys.ensure(); Input.virtual(name, true); btn.classList.add("on"); };
-        const off = (e) => { e.preventDefault(); Input.virtual(name, false); btn.classList.remove("on"); };
-        btn.addEventListener("pointerdown", on);
-        btn.addEventListener("pointerup", off);
-        btn.addEventListener("pointerleave", off);
-        btn.addEventListener("pointercancel", off);
-      });
-    }
+    // (画面下のボタン・十字キーは廃止。操作はキーボードのみ。
+    //  Input.virtual() はキャンバス内クリック判定など後段から再利用可能)
     // 初回入力で音を開始
     window.addEventListener("pointerdown", () => AudioSys.ensure(), { once: true });
     window.addEventListener("keydown", () => AudioSys.ensure(), { once: true });
@@ -943,6 +1058,7 @@
   Game.U = U; Game.PAL = PAL; Game.FONT = FONT; Game.FONT_FAMILY = FONT_FAMILY;
   Game.Input = Input; Game.Assets = Assets; Game.AudioSys = AudioSys;
   Game.Dialogue = Dialogue; Game.Save = Save;
+  Game.HeroRig = HeroRig; Game.heroFrame = heroFrame;
   window.IRO = Game; // デバッグ/後段ステージからアクセス
 
   boot();
