@@ -222,22 +222,48 @@
   const Game = {
     canvas: null, ctx: null, buf: null, bctx: null, scale: 1,
     scene: null, sceneName: "", fx: null, bloom: null, toasts: [],
+    sceneFactories: {},
     state, STORY: window.IRO_STORY, MAPS: window.IRO_MAPS,
+    registerScene(name, factory) { this.sceneFactories[name] = factory; },
     resetState() { // 章進行をリセット(タイトルでの「はじめる」用)。フラグは引き継ぐ
       const keepFlags = state.flags;
       Object.assign(state, defaultState(), { flags: keepFlags });
     },
     toast(text) { this.toasts.push({ text, t: 2.6 }); },
     setScene(name, data) {
+      Input.pressed = {}; // 遷移直前のZ/X入力を次のシーンにリークさせない
       this.sceneName = name;
       if (name === "title") this.scene = makeTitle();
       else if (name === "howto") this.scene = makeHowto(data);
       else if (name === "explore") this.scene = makeExplore(data);
+      else if (this.sceneFactories[name]) this.scene = this.sceneFactories[name](data);
+      else { console.warn("no such scene:", name); this.scene = makeTitle(); }
       if (this.scene.init) this.scene.init(data);
     },
-    /** 暗転 → mid() で切替 → 明ける */
+    // ―― 戦闘/バッドエンドの入口(battle.js が scene を登録して受ける)――
+    startBattle(id) {
+      Game.transition(() => {
+        state.world = "other"; AudioSys.setWorld("other");
+        Game.setScene("battle", { id });
+      }, "bloom");
+    },
+    endBattle() {
+      Game.transition(() => {
+        state.world = "real"; AudioSys.setWorld("real");
+        Game.setScene("explore", { intro: false });
+      }, "bloom");
+    },
+    badEnd(key) {
+      state.flags["bad_" + key] = true;
+      if (key === "bad7") state.flags.bad7seen = true;
+      Game.transition(() => {
+        state.world = "real"; AudioSys.setWorld("real");
+        Game.setScene("badend", { key });
+      }, "fade");
+    },
+    /** 暗転 → mid() で切替 → 明ける。明けども(中間点すぎ)なら新しい転送で上書き可 */
     transition(mid, type) {
-      if (this.fx) return;
+      if (this.fx && this.fx.t < this.fx.dur / 2) return;
       this.fx = { type: type || "fade", t: 0, dur: 0.7, mid, midDone: false };
     },
     updateFX(dt) {
@@ -255,7 +281,7 @@
       this.toast(ok ? "保存しました" : "保存できませんでした");
     },
   };
-  window.IRO = Game; // デバッグ/後段ステージからアクセス
+  // (モジュール公開はファイル末尾で行う ―― const の TDZ 回避)
 
   /* ================= Dialogue: 会話ウィンドウ ================= */
   const Dialogue = {
@@ -289,24 +315,27 @@
     close() { this.active = false; const cb = this.onDone; this.onDone = null; if (cb) cb(); },
     draw(ctx) {
       if (!this.active) return;
-      const p = this.cur(); const world = state.world; const pal = PAL[world];
+      const p = this.cur(); const dark = state.world !== "real";
       const wx = 8, wy = H - 74, ww = W - 16, wh = 66;
+      // 現実は「白地の台詞枠・黒文字」、向こう側は「暗紫・明文字」
+      const bg   = dark ? "#1a0026" : "#f4f4f4";
+      const edge = dark ? "#ff2d95" : "#111111";
+      const txt  = dark ? "#f4e8ff" : "#111111";
       ctx.fillStyle = "rgba(0,0,0,.25)"; ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = pal.ui; ctx.fillRect(wx, wy, ww, wh);
-      ctx.strokeStyle = pal.uiEdge; ctx.lineWidth = 1;
+      ctx.fillStyle = bg; ctx.fillRect(wx, wy, ww, wh);
+      ctx.strokeStyle = edge; ctx.lineWidth = 1;
       ctx.strokeRect(wx + 1.5, wy + 1.5, ww - 3, wh - 3);
       ctx.strokeRect(wx + 3.5, wy + 3.5, ww - 7, wh - 7);
-      let count = 0;
       ctx.textAlign = "left"; ctx.textBaseline = "top";
       if (p.n) {
         ctx.font = FONT(10, 700);
         const nw = ctx.measureText(p.n).width + 10;
-        ctx.fillStyle = world === "real" ? "#f0f0f0" : "#ff2d95";
+        ctx.fillStyle = "#111111";
         ctx.fillRect(wx + 8, wy - 8, nw, 14);
-        ctx.fillStyle = world === "real" ? "#111" : "#fff";
+        ctx.fillStyle = "#f6f6f6";
         ctx.fillText(p.n, wx + 13, wy - 5);
       }
-      ctx.font = FONT(12); ctx.fillStyle = pal.text;
+      ctx.font = FONT(12); ctx.fillStyle = txt;
       let remain = this.shown;
       for (let i = 0; i < p.rows.length; i++) {
         const line = p.rows[i];
@@ -316,7 +345,7 @@
       }
       if (this.shown >= this.totalChars(p)) {
         if (Math.floor(performance.now() / 400) % 2 === 0) {
-          ctx.fillStyle = pal.accent; ctx.beginPath();
+          ctx.fillStyle = edge; ctx.beginPath();
           ctx.moveTo(ww - 12, wy + wh - 12); ctx.lineTo(ww - 4, wy + wh - 12); ctx.lineTo(ww - 8, wy + wh - 6); ctx.fill();
         }
       }
@@ -809,7 +838,7 @@
     window.addEventListener("keydown", () => AudioSys.ensure(), { once: true });
     // 現実/向こう側のBGMトグル(状態を定期同期。setWorld は変化時のみ動作)
     setInterval(() => { AudioSys.world !== state.world && AudioSys.setWorld(state.world); }, 500);
-    // ―― デバッグ(URL に ?debug: T=世界切替 G=熟れ度+10 S=保存)――
+    // ―― デバッグ(URL に ?debug: T=世界切替 G=熟れ度+10 S=保存 B=第1戦)――
     if (/[?&]debug/.test(location.search)) {
       window.addEventListener("keydown", (e) => {
         if (e.code === "KeyT") {
@@ -821,9 +850,18 @@
           if (Game.scene && Game.scene.addRipeness) Game.scene.addRipeness(10);
         } else if (e.code === "KeyS") {
           Game.saveNow();
+        } else if (e.code === "KeyB") {
+          if (Game.sceneName === "explore") Game.startBattle("gyorome");
         }
       });
     }
   }
+  // 後段ステージ(battle.js / director)から共有するモジュール群 ―― 全宣言の後に公開
+  Game.W = W; Game.H = H; Game.TILE = TILE;
+  Game.U = U; Game.PAL = PAL; Game.FONT = FONT; Game.FONT_FAMILY = FONT_FAMILY;
+  Game.Input = Input; Game.Assets = Assets; Game.AudioSys = AudioSys;
+  Game.Dialogue = Dialogue; Game.Save = Save;
+  window.IRO = Game; // デバッグ/後段ステージからアクセス
+
   boot();
 })();
